@@ -1,6 +1,7 @@
 import numpy as np
 import os
 from isaacgym import gymapi, gymutil, gymtorch
+from SimpleRlAgent import SimpleRlAgent
 import torch
 import random
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
@@ -13,15 +14,23 @@ def __main__():
     cartpole_asset, asset_options, num_dof = make_cartpole_asset(sim, gym)
     environments,actor_handles, num_env= setup_environments_and_actors(sim, gym, args, device, num_dof, cartpole_asset, asset_options)
     viewer = create_viewer(sim, gym,environments[0])
-    dof_state_buffer,pos_buffer,vel_buffer = make_buffers(gym,sim,num_dof,num_env, device)
+    dof_state_buffer,dof_full_buffer,pos_buffer,vel_buffer = make_buffers(gym,sim,num_dof,num_env, device)
+
+    agent = SimpleRlAgent(num_dof*2, 1, torch.tensor([[0,100]]))    
+    prev_state = None
+
     # Simulation loop
     while not gym.query_viewer_has_closed(viewer):
-#        torch.cuda.empty_cache()
         gym.refresh_dof_state_tensor(sim)
-        apply_actions_vec(gym,sim,pos_buffer,vel_buffer,dof_state_buffer,device)
+        states= get_simulation_states(dof_full_buffer,num_dof,num_env) # Tensor n_envs x n_dof*2
+        observations = get_state_observation(states) # Tensor n_envs x n_dof*2
+        actions=get_agent_actions(observations,agent) # Tensor n_envs x n_action_dim
+        effort_vector = action2forceVec(actions,num_dof,num_env) # Tensor n_envs x n_dof
+       # effort_vector=base_controller(pos_buffer,vel_buffer,device,num_env,num_dof) # Tensor n_envs x n_dof
+     
         
-        # apply_actions(gym,environments, actor_handles,pos_buffer,vel_buffer)
-        
+
+        apply_actions_vec(gym,sim,effort_vector,noise_level=10)
         simulation_step(sim, gym)
         
         interface_step(sim,gym,viewer)
@@ -32,50 +41,65 @@ def __main__():
 ############################################################################################################
     #Functions
 ############################################################################################################
+def action2forceVec(actions,num_dof,num_env):
+    force_vector = torch.zeros(num_env,num_dof)
+    force_vector[:,1] = actions.squeeze()
+    return force_vector
+
+def get_state_observation(states):
+    return states
+
+def get_agent_actions(observations:torch.tensor,agent)->torch.tensor: # Tensor n_envs x n_obs_dim
+    
+
+    actions = agent.select_actions(observations,exploration=True) # Tensor n_envs x n_action_dim
+    return actions
+
+
 def make_buffers(gym,sim,num_dof,num_env, device):
     dof_state_buffer_tensor  = gym.acquire_dof_state_tensor(sim)
     gym.refresh_dof_state_tensor(sim)
     dof_state_buffer = gymtorch.wrap_tensor(dof_state_buffer_tensor)
-    pos_view = dof_state_buffer.view(num_env, num_dof, 2)[..., 0]
-    vel_view = dof_state_buffer.view(num_env, num_dof, 2)[..., 1]
+    dof_full_view = dof_state_buffer.view(num_env, num_dof, 2)
+    pos_view = dof_full_view[..., 0]
+    vel_view = dof_full_view[..., 1]
+    # pos_view = dof_state_buffer.view(num_env, num_dof, 2)[..., 0]
+    # vel_view = dof_state_buffer.view(num_env, num_dof, 2)[..., 1]
 
-    return dof_state_buffer, pos_view, vel_view
+    return dof_state_buffer,dof_full_view, pos_view, vel_view
 
-def get_simulation_state(sim, gym):
-    sim_state = gym.get_sim_state(sim)
-    observation = gym.get_sim_observation(sim)
-    reward = gym.get_sim_reward(sim)
-    return sim_state,observation,reward
+def get_simulation_states(dof_state_buffer,num_dof,num_env):
+    sim_state = dof_state_buffer.view(num_env, num_dof*2)
+    return sim_state
 
-def apply_actions_vec(gym,sim,pos_buffer,vel_buffer,dof_state_buffer,device,num_envs=100,num_dof=2):
-    # actions_tensor = torch.zeros(self.num_envs * self.num_dof, device=self.device, dtype=torch.float)
-    #     actions_tensor[::self.num_dof] = actions.to(self.device).squeeze() * self.max_push_effort
-    #     forces = gymtorch.unwrap_tensor(actions_tensor)
-    #     self.gym.set_dof_actuation_force_tensor(self.sim, forces)
-    # move variables to device
-    state=dof_state_buffer
-    noise = torch.randn(num_envs, num_dof, device=device)*10
-    noise[:,1] = 0
+def base_controller(pos_buffer,vel_buffer,device,num_envs=100,num_dof=2)->torch.tensor:
     controller_tensoer=torch.zeros(num_envs,num_dof, device=device, dtype=torch.float)
-    controller_tensoer[:,1] =  (pos_buffer[:,1]*-0.1+vel_buffer[:,1]*-0.01)*1000
-    action_tensor = noise +controller_tensoer
-    #action_tensor[:,0] =  (pos_buffer[:,0]*-0.1+vel_buffer[:,0]*-0.01)*1000
-    force_vector = gymtorch.unwrap_tensor(action_tensor)
+    controller_tensoer[:,1] =  (pos_buffer[:,1]*-0.1+vel_buffer[:,1]*-0.00)*100
+    action_tensor = controller_tensoer
+    return action_tensor
+
+def apply_actions_vec(gym,sim,action_tensor,noise_level=0.1):
+    #noise with same dimension as action_tensor
+    noise = torch.randn_like(action_tensor)*noise_level
+    total_force = action_tensor+noise
+    force_vector = gymtorch.unwrap_tensor(total_force)
+    
     gym.set_dof_actuation_force_tensor(sim, force_vector)
 
-def apply_actions(gym,environments, actor_handles):
-    actor_efforts = np.zeros((len(environments)))
+def apply_actions(gym,environments, actor_handles,actions,noise_level=100,noise_mask=[1,0]):
+    actor_efforts = actions
+    noise_mask_tensor = torch.tensor(noise_mask, dtype=torch.float32, device=actions.device)
+    
     for i, env in enumerate(environments):
         # get dof positions and velocities
         actor_handle = actor_handles[i]
         dof_handle = gym.get_actor_dof_handle(env,actor_handle,1)
-        dof_pos = gym.get_dof_position(env, dof_handle)
-        dof_vel = gym.get_dof_velocity(env, dof_handle)
-        random_effort = random.uniform(-4,4)*0.1
-        actor_efforts[i] += random_effort
-        effort = actor_efforts[i]*1 +dof_vel*-0.0+dof_pos*-5
-        efforts = np.repeat([0,effort],1).astype('f')
-        gym.apply_actor_dof_efforts(env, actor_handle, efforts)
+        random_effort = random.uniform(-1,1)*noise_level*noise_mask_tensor
+        actor_efforts[i,:] += random_effort
+        effort = actor_efforts[i]*1  # Tensor 2x1
+        #efforts = effort
+        gym.apply_actor_dof_efforts(env, actor_handle, effort)
+    return actor_efforts
 
 def interface_step(sim,gym,viewer):
     gym.step_graphics(sim)
