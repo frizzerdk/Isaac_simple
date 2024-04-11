@@ -22,20 +22,23 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         # Set the dimensions of the state and action
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.out_dim = 1
+        # self.state_dim = state_dim
+        # self.action_dim = action_dim
+        # self.out_dim = 1
+        self.register_buffer('state_dim', torch.tensor(state_dim))
+        self.register_buffer('action_dim', torch.tensor(action_dim))
+        self.register_buffer('out_dim', torch.tensor(1))
 
         # Layer 1
         # Layer s1 state
-        self.fcs1 = nn.Linear(state_dim, 64)
+        self.fcs1 = nn.Linear(state_dim, 8)
         self.fcs1.activation = nn.LeakyReLU()
         # Layer s2 state 
         #layer 1 dim 
-        self.fcs2 = nn.Linear(self.fcs1.out_features, 32)
+        self.fcs2 = nn.Linear(self.fcs1.out_features, 4)
         self.fcs2.activation = nn.LeakyReLU()
         # Layer a1 action
-        self.fca1 = nn.Linear(action_dim, 32)
+        self.fca1 = nn.Linear(action_dim, 4)
         self.fca1.activation = nn.LeakyReLU()
 
         # Layer 2 from state and action
@@ -99,7 +102,7 @@ class Critic(nn.Module):
         prediction = self.forward(state, action,save_activations=True)
         return prediction,self.activations
 
-    def loss(self, state, action, reward, next_state, done, truncated, target_actor, target_critic, gamma, device='cpu',
+    def loss(self, state, action, reward, next_state, done, truncated, target_actor, target_critic, gamma, device,
              l2_reg_coeff=0.0, is_weights=None):
         done = done.to(device)
         truncated = truncated.to(device)
@@ -107,6 +110,7 @@ class Critic(nn.Module):
         next_val = torch.squeeze(target_critic.forward(next_state, a2).detach().to(device))
         next_val = next_val.squeeze(-1).unsqueeze(-1)
         done = done.squeeze(-1).unsqueeze(-1)
+        reward = reward.squeeze(-1).unsqueeze(-1)
         y_expected = (reward + gamma * next_val) * (1 - done) + reward * done
         prediction, layer_activations = self.get_activations(state, action)
         y_predicted = prediction.to(device)
@@ -118,16 +122,16 @@ class Critic(nn.Module):
         else:
             loss_critic = F.smooth_l1_loss(y_predicted, y_expected)
 
-        critic_reg = torch.tensor(0.0).to(device)
-        critic_reg.to(device)
-        for activation in layer_activations:
-            activation = F.relu(activation.abs() - 10, inplace=True).to(device)
-            critic_reg += torch.norm(activation, 2)
-        critic_reg = l2_reg_coeff * critic_reg
+        # critic_reg = torch.tensor(0.0).to(device)
+        # critic_reg.to(device)
+        # for activation in layer_activations:
+        #     activation = F.relu(activation.abs() - 10, inplace=True).to(device)
+        #     critic_reg += torch.norm(activation, 2)
+        # critic_reg = l2_reg_coeff * critic_reg
         td_error = (y_predicted - y_expected).abs()
         self.td_error = td_error.detach()
 
-        return loss_critic + critic_reg
+        return loss_critic #+ critic_reg
 
     def validate(self, state, action, reward,next_state, target_actor, target_critic, gamma):
         """
@@ -155,16 +159,18 @@ class Critic(nn.Module):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, action_lim):
+    def __init__(self, state_dim, action_dim):
         super(Actor, self).__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.action_lim = action_lim
-        self.fc1 = nn.Linear(state_dim, 256)
+        # self.state_dim = state_dim
+        # self.action_dim = action_dim
+        # self.action_lim = action_lim
+        self.register_buffer('action_dim', torch.tensor(action_dim))
+        self.register_buffer('state_dim', torch.tensor(state_dim))
+        self.fc1 = nn.Linear(state_dim, 8)
         self.fc1.activation = nn.LeakyReLU()
-        self.fc2 = nn.Linear(self.fc1.out_features, 128)
+        self.fc2 = nn.Linear(self.fc1.out_features, 4)
         self.fc2.activation = nn.LeakyReLU()
-        self.fc3 = nn.Linear(self.fc2.out_features, 64)
+        self.fc3 = nn.Linear(self.fc2.out_features, 2)
         self.fc3.activation = nn.LeakyReLU()
         self.fc4 = nn.Linear(self.fc3.out_features, action_dim)
         self.fc4.activation = nn.Tanh()
@@ -176,6 +182,7 @@ class Actor(nn.Module):
         self.bn3 = nn.BatchNorm1d(self.fc3.out_features)
 
         self.activations = []
+        
 
 
 
@@ -210,7 +217,7 @@ class Actor(nn.Module):
         x = self.fc4(x)
         action = self.fc4.activation(x)
 
-        action = action * self.action_lim[:,1] +self.action_lim[:,0] # b x action_dim * action_lim + action_lim
+        action = action  # b x action_dim * action_lim + action_lim
 
         return action
 
@@ -223,7 +230,7 @@ class Actor(nn.Module):
         action = self.forward(state, save_activations=True)
         return action, self.activations
 
-    def loss(self, state,done, critic,device='cpu',l2_reg_coeff=0.1):
+    def loss(self, state,done, critic,device='cpu',l2_reg_coeff=0.0):
         """
         returns loss of actor network
         :param state: Input state (Torch Variable : [n,state_dim] )

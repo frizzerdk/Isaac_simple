@@ -10,37 +10,39 @@ import replay_buffer
 from torch.autograd import Variable
 
 
-class SimpleRlAgent:
+class PIDAgent:
     def __init__(self, state_dim: int, action_dim: int, action_limits: torch.tensor,device:str = None):
         self.device = device if device is not None else "cuda" if torch.cuda.is_available() else "cpu"
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.action_lim = action_limits.to(self.device)
-        self.latest_episode = 0
-        self.actor, self.actor_target, self.actor_optimizer, self.critic, self.critic_target, self.critic_optimizer = self._build_networks()
+        self.critic, self.critic_optimizer, self.actor = self._build_networks()
         self.noise = OrnsteinUhlenbeckActionNoise(action_dim, mu=0, theta=0.15, sigma=0.2)
         self.replay_buffer = replay_buffer.ReplayBuffer(10000, self.device)
 
+    class Actor(nn.Module):
+        def __init__(self, state_dim, action_dim):
+            self.state_dim = state_dim
+            self.action_dim = action_dim
+
+            self.P=0.1
+            self.I=0
+            self.D=0.01
+
+
+        def forward(self, state):
+            #action = torch.zeros(state.shape[0],self.action_dim,device=self.device)
+            action = -self.P*state[:,2] -self.D*state[:,3]# - self.D*state[:,3]
+            
+            return action.unsqueeze(1)
 
     def _build_networks(self):
-        actor = Networks.Actor(
-            self.state_dim, self.action_dim)
-        actor_target = Networks.Actor(
-            self.state_dim, self.action_dim)
-        actor_optimizer = torch.optim.Adam(actor.parameters(), lr=0.0001,weight_decay=0.0001)
+        actor = self.Actor(self.state_dim, self.action_dim)
         critic = Networks.Critic(self.state_dim, self.action_dim)
-        critic_target = Networks.Critic(self.state_dim, self.action_dim)
-        critic_optimizer = torch.optim.Adam(critic.parameters(), lr=0.001, weight_decay=0.0001)
-
-        actor.to(self.device)
-        actor_target.to(self.device)
+        critic_optimizer = torch.optim.Adam(critic.parameters(), lr=0.001, weight_decay=0.001)
+        
         critic.to(self.device)
-        critic_target.to(self.device)
-
-        hard_update(actor_target, actor)
-        hard_update(critic_target, critic)
-
-        return actor, actor_target, actor_optimizer, critic, critic_target, critic_optimizer
+        return critic, critic_optimizer, actor
 
     def select_actions(self, observation: torch.tensor, exploration: bool = True, exploration_mask=None):
         # action: tensor (batch_size x action_dim), observation: tensor (batch_size x state_dim)
@@ -98,23 +100,16 @@ class SimpleRlAgent:
         # Update critic
 
         critic_loss = self.critic.loss(state, action, reward, next_state, done, done,
-                                         self.actor_target, self.critic_target, gamma, self.device)
+                                         self.actor, self.critic, gamma, self.device)
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        # Update actor
-        actor_loss = self.actor.loss(
-            state, done, self.critic_target, self.device)
-
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
+        
 
         # Soft update target networks
-        soft_update(self.actor_target, self.actor, 0.001)
-        soft_update(self.critic_target, self.critic, 0.001)
+        #soft_update(self.critic_target, self.critic, 0.001)
 
     def estimate_Q(self, state, action):
         action = action.detach()
