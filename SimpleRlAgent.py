@@ -18,7 +18,7 @@ class SimpleRlAgent:
         self.action_lim = action_limits.to(self.device)
         self.latest_episode = 0
         self.actor, self.actor_target, self.actor_optimizer, self.critic, self.critic_target, self.critic_optimizer = self._build_networks()
-        self.noise = OrnsteinUhlenbeckActionNoise(action_dim, mu=0, theta=0.15, sigma=0.2)
+        self.noise = OrnsteinUhlenbeckActionNoise(action_dim, mu=0, theta=0.15, sigma=0.2,batch_size=16)
         self.replay_buffer = replay_buffer.ReplayBuffer(10000, self.device)
 
 
@@ -27,7 +27,7 @@ class SimpleRlAgent:
             self.state_dim, self.action_dim)
         actor_target = Networks.Actor(
             self.state_dim, self.action_dim)
-        actor_optimizer = torch.optim.Adam(actor.parameters(), lr=0.0001,weight_decay=0.0001)
+        actor_optimizer = torch.optim.Adam(actor.parameters(), lr=0.0001,weight_decay=0.00001)
         critic = Networks.Critic(self.state_dim, self.action_dim)
         critic_target = Networks.Critic(self.state_dim, self.action_dim)
         critic_optimizer = torch.optim.Adam(critic.parameters(), lr=0.001, weight_decay=0.0001)
@@ -78,7 +78,7 @@ class SimpleRlAgent:
         torch.save(self.critic_target.state_dict(), critic_file)
         print('Models saved successfully')
 
-    def learn(self, batch_size=128, gamma=0.8):
+    def learn(self, batch_size=16, gamma=0.8):
         """
         Trains the actor and critic networks
         :param batch_size: batch size for training
@@ -113,12 +113,13 @@ class SimpleRlAgent:
         self.actor_optimizer.step()
 
         # Soft update target networks
-        soft_update(self.actor_target, self.actor, 0.001)
-        soft_update(self.critic_target, self.critic, 0.001)
+        soft_update(self.actor_target, self.actor, 0.01)
+        soft_update(self.critic_target, self.critic, 0.01)
 
     def estimate_Q(self, state, action):
         action = action.detach()
-        normalized_action = (action -(self.action_lim[:,0]+self.action_lim[:,1])/2)/(self.action_lim[:,1]-self.action_lim[:,0])*2
+        normalized_action = (action -(self.action_lim[:,0]+self.action_lim[:,1])/2)/(self.action_lim[:,1]/2-self.action_lim[:,0]/2)
+        #print('max action:',torch.max(normalized_action).item(),'min action:',torch.min(normalized_action).item())
         return self.critic(state, normalized_action)
 
     def load_models(self, episode):

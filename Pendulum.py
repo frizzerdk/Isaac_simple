@@ -19,8 +19,8 @@ def __main__():
     
     sim, gym, device, pipeline_device, args= setup_isaac_gym(gpu_pipeline=False, use_gpu=True)
     add_ground_to_simulation(sim, gym)
-    cartpole_asset, asset_options, num_dof = make_cartpole_asset(sim, gym)
-    environments,actor_handles, num_env= setup_environments_and_actors(sim, gym, args, device, num_dof, cartpole_asset, asset_options)
+    pendulum_asset, asset_options, num_dof = make_pendulum_asset(sim, gym)
+    environments, _ , num_env= setup_environments_and_actors(sim, gym, args, device, num_dof, pendulum_asset, asset_options)
     viewer = create_viewer(sim, gym,environments[0])
     dof_state_buffer,state_buffer,dof_full_view = make_buffers(gym,sim,num_dof,num_env,pipeline_device)
     progress_buf , reset_buf , truncate_buf= torch.zeros(num_env,1,device=device),torch.zeros(num_env,1,device=device),torch.zeros(num_env,1,device=device)
@@ -85,7 +85,7 @@ def truncate_envs(sim, gym, states,dof_state_buffer,progress_buf,truncate_buf,pi
         progress_buf[truncate_indices] = 0
         
 def reset_failed_envs(sim,gym,states,dof_state_buffer,progress_buf,reset_buf,pipeline_device):
-    state_lims = torch.tensor([[-100,100],[-100,100],[-3,3],[-100,100]],device=pipeline_device)
+    state_lims = torch.tensor([[-3,3],[-100,100]],device=pipeline_device)
     failed_envs = torch.any(torch.logical_or(states<state_lims[:,0],states>state_lims[:,1]),dim=1)
     failed_indices = torch.where(failed_envs)[0].tolist()
     if len(failed_indices)>0:
@@ -98,8 +98,8 @@ def reset_idx(sim,gym, env_ids,dof_state_buffer,states,device):
     #device ='cpu'
     env_ids = env_ids.to(device)
     states = states.to(device)
-    state_init_dist = torch.tensor([[-4, 4], [-0.01, 0.01], [-0.5, 0.5], [-0.01, 0.01]], device=device) # [min, max] for each state dimension
-    reset_states = torch.rand((len(env_ids), 4), device=device) * (state_init_dist[:, 1] - state_init_dist[:, 0]) + state_init_dist[:, 0]
+    state_init_dist = torch.tensor([[-0.5, 0.5], [-0.01, 0.01]], device=device) # [min, max] for each state dimension
+    reset_states = torch.rand((len(env_ids), state_init_dist.size(0)), device=device) * (state_init_dist[:, 1] - state_init_dist[:, 0]) + state_init_dist[:, 0]
     #reset_states = torch.ones_like(reset_states)
     states[env_ids] = reset_states
 
@@ -117,19 +117,22 @@ def compute_value_function_dummy(states,counter=[0]):
     return values
 
 def compute_q_function_agent(states,agent,device):
-    states = states.clone().detach()*torch.tensor([[300,4,3,20]],device=device)
+    states = states.clone().detach()*torch.tensor([[300,0,3,20]],device=device)
     actions = states[:,0].clone().detach().unsqueeze(1)
     states = states.detach()
     states[:,0] = 0
+    states = states[:,2:4]
     values= agent.estimate_Q(states,actions)-agent.estimate_Q(states,actions*0)
     return values
 def compute_value_function_agent(states,agent,device):
-    states = states.clone().detach()*torch.tensor([[4,4,3,20]],device=device)
+    states = states.clone().detach()*torch.tensor([[0,0,3,20]],device=device)
+    states = states[:,2:4]
     actions = agent.select_actions(states,exploration=False)
     values= agent.estimate_Q(states,actions)
     return values
 def compute_policy_function_agent(states,agent,device):
-    states = states.clone().detach()*torch.tensor([[4,4,3,20]],device=device)
+    states = states.clone().detach()*torch.tensor([[0,0,3,20]],device=device)
+    states = states[:,2:4]
     actions = agent.select_actions(states,exploration=False)
     return actions
 
@@ -170,7 +173,7 @@ def show_value_function(device, value_function=None, limits=None, index_map=None
     value_function = compute_value_function_dummy if value_function is None else value_function
     state_map = [2, 3, 0, 1] if index_map is None else index_map
     
-    img_grid_dim = 7
+    img_grid_dim = 3
     img_dim = 50
     value_function_grid = torch.zeros((img_grid_dim * img_dim, img_grid_dim * img_dim), device=device)
 
@@ -204,23 +207,21 @@ def show_value_function(device, value_function=None, limits=None, index_map=None
 def calculate_rewards(s1,a1,s2,num_env,reset_buf):
     # first dimension is env index
     # negative reward for distance from 0 postion and speed accross all states
-    p1, v1, p2, v2 = s2[:, 0], s2[:, 1], s2[:, 2], s2[:, 3]
+    p1, v1= s2[:, 0], s2[:, 1]
     #state_rewards =s2[:,0].abs()*-0+s2[:,1].abs()*-0.000+s2[:,2].abs()*s2[:,2].abs()*2+s2[:,3].abs()*-0.0001
-    state_rewards = p1.abs()*-0\
-                    +v1.abs()*-0\
-                    +p2.pow(2)*-1 - p2.abs()\
-                    +v2.abs()*-0.0001\
+    state_rewards = p1.pow(2)*-1 - p1.abs()\
+                    +v1.abs()*-0.0001\
 
     action_rewards = a1[:,0].pow(2)*-0.00001
     reset_rewards = reset_buf.squeeze()*-10
     total_rewards = state_rewards+action_rewards+reset_rewards
     # print min and max rewards
-    print(f"Min reward: {total_rewards.min().item()}, Max reward: {total_rewards.max().item()}")
+    #print(f"Min reward: {total_rewards.min().item()}, Max reward: {total_rewards.max().item()}")
     return total_rewards
 
 def action2forceVec(actions,num_dof,num_env,device):
     force_vector = torch.zeros(num_env,num_dof,device=device,dtype=torch.float)
-    force_vector[:,1] = actions.squeeze()
+    force_vector[:,0] = actions.squeeze()
     return force_vector
 
 def get_state_observation(states):
@@ -328,7 +329,6 @@ def setup_environments_and_actors(sim, gym, args, device, num_dof, cartpole_asse
         # configure the joints for effort control mode (once)
         props = gym.get_actor_dof_properties(env, actor_handle)
         props["driveMode"][0]=(gymapi.DOF_MODE_EFFORT)
-        props["driveMode"][1]=(gymapi.DOF_MODE_EFFORT)
         props["stiffness"].fill(0.0)
         props["damping"].fill(0.0)
         gym.set_actor_dof_properties(env, actor_handle, props)
@@ -354,23 +354,23 @@ def create_viewer(sim, gym,env):
         raise ValueError("Failed to create viewer")
     return viewer
     
-def make_cartpole_asset(sim, gym):
+def make_pendulum_asset(sim, gym):
     asset_root = os.path.dirname(os.path.abspath(__file__))  # Adjust this to the correct folder
-    cartpole_urdf_file = "cartpole.urdf"  # Ensure this is the correct filename
-    cartpole_urdf_path = os.path.join(asset_root, cartpole_urdf_file)
+    pendulum_urdf_file = "pendulum.urdf"  # Ensure this is the correct filename
+    pendulum_urdf_path = os.path.join(asset_root, pendulum_urdf_file)
 
     # Make sure the URDF file exists at the specified path
-    if not os.path.exists(cartpole_urdf_path):
-        raise FileNotFoundError(f"Could not find URDF file at {cartpole_urdf_path}")
+    if not os.path.exists(pendulum_urdf_path):
+        raise FileNotFoundError(f"Could not find URDF file at {pendulum_urdf_path}")
     
     # Set asset options
     asset_options = gymapi.AssetOptions()
     asset_options.fix_base_link = True
 
     # Load the CartPole URDF
-    cartpole_asset = gym.load_asset(sim, asset_root,cartpole_urdf_file, asset_options)
-    num_dof=gym.get_asset_dof_count(cartpole_asset)
-    return cartpole_asset, asset_options, num_dof
+    pendulum_asset = gym.load_asset(sim, asset_root,pendulum_urdf_file, asset_options)
+    num_dof=gym.get_asset_dof_count(pendulum_asset)
+    return pendulum_asset, asset_options, num_dof
 
 def setup_isaac_gym(gpu_pipeline, use_gpu):
     device = torch.device("cuda" if torch.cuda.is_available() and use_gpu else "cpu") 
@@ -380,7 +380,7 @@ def setup_isaac_gym(gpu_pipeline, use_gpu):
     gym = gymapi.acquire_gym()
 
     # Parse arguments (for standalone applications)
-    args = gymutil.parse_arguments(description="CartPole Visualization in Isaac Gym")
+    args = gymutil.parse_arguments(description="Pendulum Visualization in Isaac Gym")
     
 
     # Set physics engine and device

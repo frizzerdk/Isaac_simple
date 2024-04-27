@@ -31,14 +31,14 @@ class Critic(nn.Module):
 
         # Layer 1
         # Layer s1 state
-        self.fcs1 = nn.Linear(state_dim, 8)
+        self.fcs1 = nn.Linear(state_dim, 16)
         self.fcs1.activation = nn.LeakyReLU()
         # Layer s2 state 
         #layer 1 dim 
-        self.fcs2 = nn.Linear(self.fcs1.out_features, 4)
+        self.fcs2 = nn.Linear(self.fcs1.out_features, 8)
         self.fcs2.activation = nn.LeakyReLU()
         # Layer a1 action
-        self.fca1 = nn.Linear(action_dim, 4)
+        self.fca1 = nn.Linear(action_dim, 8)
         self.fca1.activation = nn.LeakyReLU()
 
         # Layer 2 from state and action

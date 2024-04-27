@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<robot name="pendulum">
+
+  <link name="base">
+    <visual>
+      <geometry>
+        <cylinder length="0.1" radius="0.1" />
+      </geometry>
+      <origin xyz="0 0 0" rpy = "-1.5708 0 1.5708"/>
+      <material name="cart_mat">
+        <color rgba="0.3 0.5 0.7 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+          <cylinder length="0.1" radius="0.1" />
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="1"/>
+    </inertial>
+  </link>
+
+  <link name="pole">
+    <visual>
+      <geometry>
+        <box size="0.04 0.06 1.0"/>	
+      </geometry>
+      <origin xyz="0 0 0.47"/>
+      <material name="pole_mat">
+        <color rgba="0.1 0.1 0.3 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.04 0.06 1.0"/>	
+      </geometry>
+      <origin xyz="0 0 0.47"/>
+    </collision>
+    <inertial>
+      <mass value="1"/>
+      <origin xyz="0 0 0.47"/>
+    </inertial>
+  </link>
+
+  
+  <joint name="base_to_pole" type="continuous">
+    <axis xyz="1 0 0"/>
+    <origin xyz="0.12 0 0"/>
+    <parent link="base"/>
+    <child link="pole"/>
+    <limit effort="1000.0" velocity="8"/>
+  </joint>
+  
+</robot>
